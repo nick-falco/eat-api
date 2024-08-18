@@ -12,37 +12,72 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from flask import Flask
+import multiprocessing
+from flask import Flask, jsonify, request
+from flask_cors import CORS, cross_origin
 from eat.core.components import Groupoid, TermOperation
 from eat.beam_algorithm.beam import BeamEnumerationAlgorithm
 app = Flask(__name__)
+cors = CORS(app)
 
+def subprocess_run_beam_algorithm(groupoid, target, queue):
+        algorithm = "MFBA"
+        mtgm = "random-term-generation"
+        prob = 0.1
+        beam_width = sub_beam_width = 2
+        grp = Groupoid(groupoid)
+        to = TermOperation(groupoid=grp, term_variables=["x", "y", "z"], target=target)
+        beam = BeamEnumerationAlgorithm(
+            grp,
+            to,
+            algorithm,
+            male_term_generation_method=mtgm,
+            term_expansion_probability=prob,
+            beam_width=beam_width,
+            sub_beam_width=sub_beam_width)
+        node, search_time = beam.run(verbose=True)
+        queue.put((node.term, search_time))
 
-def run_beam_algorithm():
-    algorithm = "FBA"
-    mtgm = "random-term-generation"
-    prob = 0.1
-    beam_width = sub_beam_width = 2
-    grp = Groupoid([2, 1, 2, 1, 0, 0, 0, 0, 1])
-    to = TermOperation(groupoid=grp, term_variables=["x", "y", "z"])
-    beam = BeamEnumerationAlgorithm(
-        grp,
-        to,
-        algorithm,
-        male_term_generation_method=mtgm,
-        term_expansion_probability=prob,
-        beam_width=beam_width,
-        sub_beam_width=sub_beam_width)
-    node, _ = beam.run()
-    return node
+def run_beam_algorithm(groupoid, target):
+    queue = multiprocessing.Queue()
+
+    process = multiprocessing.Process(target=subprocess_run_beam_algorithm, args=(groupoid, target, queue))
+
+     # Start the process
+    process.start()
+    
+    # Wait for the process to complete, with a timeout of 5 seconds
+    process.join(timeout=60)
+    
+    # Check if the process is still alive (which means it didn't finish within the timeout)
+    if process.is_alive():
+        print("Process did not finish within timeout. Terminating...")
+        process.terminate()
+        process.join()
+    else:
+        print("Process finished successfully")
+        # Retrieve the results from the queue
+        if not queue.empty():
+            term, search_time = queue.get()
+            return term, search_time
+        else:
+            print("No data returned from the process")
+    
 
 @app.route('/', methods=['GET'])
+@cross_origin(supports_credentials=True)
 def landing():
-    return "Welcome to the EAT API!"
+    return "Welcome to the Eat API"
 
-@app.route('/runeat', methods=['GET'])
+@app.route('/runeat', methods=['POST'])
+@cross_origin(supports_credentials=True)
 def eat():
-    return run_beam_algorithm().term
+    data = request.get_json()  # Get the JSON data
+    groupoid = [int(t) for t in data['groupoid']]
+    target = [[t] for t in data['target']]
+    term, search_time= run_beam_algorithm(groupoid, target)
+    response = jsonify({'term': term, 'search_time': f"{search_time:.2f}"})
+    return response
 
 
 if __name__ == '__main__':
